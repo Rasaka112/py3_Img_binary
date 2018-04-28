@@ -17,7 +17,7 @@ from skimage import img_as_ubyte
 def get_raster_parameters(inputpath):
     """Get geospatial parameters from a raster file.
 
-    This function gets geospatial parameters from a raster file.
+    This function imports geospatial parameters from a raster file.
     Raster file should be described an absolute path.
 
     Args:
@@ -42,10 +42,10 @@ def get_raster_parameters(inputpath):
     cols = raster.RasterXSize
     rows = raster.RasterYSize
     spatial_reference = raster.GetProjectionRef()
-    print origin_x, origin_y, pixelwidth, pixelheight, cols, rows, spatial_reference
+    print(origin_x, origin_y, pixelwidth, pixelheight, cols, rows, spatial_reference)
     return origin_x, origin_y, pixelwidth, pixelheight, cols, rows, spatial_reference
 
-
+@jit
 def make_output_raster(array, outpath, parameters):
     """Export input array as a georeferenced raster file
 
@@ -70,12 +70,12 @@ def make_output_raster(array, outpath, parameters):
     outraster.SetProjection(outraster_spatialreference.ExportToWkt())
     outband.FlushCache()
 
-
+@jit
 def calc_threshold_otsu(array):
     """Calculate threshold by using the Otsu-method
 
     This function calculates a threshold which divides an array.
-    Threshold is calculated by using Otsu-method.
+    The Otsu-method is used.
 
     Args:
         array: Target array
@@ -93,7 +93,7 @@ def calc_threshold_otsu(array):
     threshold_otsu = 0
     thresholdlist = np.sort(np.unique(array1d))
     count_allpixel = len(array1d)
-    print thresholdlist
+    print(thresholdlist)
     for threshold in thresholdlist:
         index = np.argmax(array1d > threshold)
         # index = np.argmin(array1d < threshold)
@@ -112,7 +112,7 @@ def calc_threshold_otsu(array):
                 threshold_otsu = threshold
     return threshold_otsu
 
-
+@jit
 def apply_threshold_to_image(array, threshold):
     """Apply threshold for an array to binarize
 
@@ -146,7 +146,7 @@ def make_output_text(filename, filepath, textdata):
 
     outpath = os.path.join(filepath, filename)
     cf = open(outpath, 'wb')
-    [cf.write(line+"\n") for line in textdata]
+    cf.write([line+"\n" for line in textdata])
     cf.close()
 
 
@@ -165,7 +165,7 @@ if __name__ == '__main__':
                 imgparameters = get_raster_parameters(imgpath)
                 # print imgparameters
                 # otsu(scikit-image built-in function)
-                print filters.threshold_otsu(rdimg)
+                print(filters.threshold_otsu(rdimg))
                 # otsu = filters.threshold_otsu(rdimg)
                 # binimg = rdimg < otsu
 
@@ -174,9 +174,9 @@ if __name__ == '__main__':
                 binary_otsu = apply_threshold_to_image(rdimg, threshold_otsu)
                 make_output_raster(binary_otsu, outpath, imgparameters)
                 thresholdlist.append(item+","+str(threshold_otsu))
-                print "raster file : "+item
+                print("raster file : {}".format(item))
                 # print "threshold(built-in otsu) = "+str(otsu)
-                print "threshold(otsu) = "+str(threshold_otsu)
+                print("threshold(otsu) = {}".format(threshold_otsu))
 
     thresholdfile = "thresold.csv"
     make_output_text(thresholdfile, outdir, thresholdlist)
