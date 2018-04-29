@@ -1,9 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-Created on Sat Jun 17 18:22:17 2017
 Image Processing
-
-@author: ryuichichiba
 """
 
 import os
@@ -151,8 +148,8 @@ def make_output_text(filename, filepath, textdata):
 
 
 if __name__ == '__main__':
-    srcdir = r"/Users/ryuichichiba/scriptwork/testimg/geotiff"
-    outdir = r"/Users/ryuichichiba/scriptwork/testimg/out"
+    srcdir = r""
+    outdir = r""
     thresholdlist = []
     for root, dirs, files in os.walk(srcdir):
         for item in files:
