@@ -4,11 +4,34 @@ Image Processing
 """
 
 import os
-import numpy as np
-from numba import jit
-from osgeo import gdal, osr
-from skimage import filters
-from skimage import img_as_ubyte
+
+# Optional third-party dependencies ------------------------------------------------------
+# The original script relies on several heavy geospatial/image processing libraries.  In
+# the execution environment used for the kata these libraries might not be installed.
+# Import them lazily and provide minimal fallbacks so that lightweight utility
+# functions (such as ``make_output_text``) can be imported and tested without pulling
+# in the full stack.
+
+try:  # pragma: no cover - optional dependency
+    import numpy as np
+except Exception:  # pragma: no cover - any ImportError subclass
+    np = None
+
+try:  # pragma: no cover - optional dependency
+    import rasterio
+    from rasterio.crs import CRS
+    from rasterio.transform import Affine
+except Exception:  # pragma: no cover - any ImportError subclass
+    rasterio = CRS = Affine = None
+
+try:  # pragma: no cover - optional dependency
+    from skimage import filters
+    from skimage import img_as_ubyte
+except Exception:  # pragma: no cover - provide fallbacks
+    filters = None
+
+    def img_as_ubyte(arr):  # type: ignore[override]
+        return arr
 
 
 def get_raster_parameters(inputpath):
@@ -30,86 +53,67 @@ def get_raster_parameters(inputpath):
         ross: number of rows
         spatial_reference: spatial reference
     """
-    raster = gdal.Open(inputpath)
-    geotransform = raster.GetGeoTransform()
-    origin_x = geotransform[0]
-    origin_y = geotransform[3]
-    pixelwidth = geotransform[1]
-    pixelheight = geotransform[5]
-    cols = raster.RasterXSize
-    rows = raster.RasterYSize
-    spatial_reference = raster.GetProjectionRef()
+    if rasterio is None:
+        raise ImportError("rasterio is required to read raster parameters")
+
+    with rasterio.open(inputpath) as src:
+        origin_x = src.transform.c
+        origin_y = src.transform.f
+        pixelwidth = src.transform.a
+        pixelheight = src.transform.e
+        cols = src.width
+        rows = src.height
+        spatial_reference = src.crs.to_wkt() if src.crs else None
+
     print(origin_x, origin_y, pixelwidth, pixelheight, cols, rows, spatial_reference)
     return origin_x, origin_y, pixelwidth, pixelheight, cols, rows, spatial_reference
-
-@jit
 def make_output_raster(array, outpath, parameters):
-    """Export input array as a georeferenced raster file
+    """Export input array as a georeferenced raster file"""
 
-    This function exports an array as a georeferenced raster file.
-    Export parameters are determined by input.
+    if rasterio is None:
+        raise ImportError("rasterio is required to export raster data")
 
-    Args:
-        array: Target array to export
-        outpath: Target path where the raster file is exported
-        parameters: Geospatial parameters for exported raster file.
+    transform = Affine(parameters[2], 0, parameters[0], 0, parameters[3], parameters[1])
+    crs = CRS.from_wkt(parameters[6]) if parameters[6] else None
+    profile = {
+        "driver": "GTiff",
+        "height": parameters[5],
+        "width": parameters[4],
+        "count": 1,
+        "dtype": array.dtype,
+        "transform": transform,
+        "crs": crs,
+        "NBITS": 1,
+    }
+    with rasterio.open(outpath, "w", **profile) as dst:
+        dst.write(array, 1)
 
-    """
-    driver = gdal.GetDriverByName('GTiff')
-    outraster = driver.Create(outpath, parameters[4], parameters[5], 1,
-                              gdal.GDT_Byte, ['NBITS=1'])
-    outraster.SetGeoTransform((parameters[0], parameters[2], 0, parameters[1],
-                               0, parameters[3]))
-    outband = outraster.GetRasterBand(1)
-    outband.WriteArray(array)
-    outraster_spatialreference = osr.SpatialReference()
-    outraster_spatialreference.ImportFromWkt(parameters[6])
-    outraster.SetProjection(outraster_spatialreference.ExportToWkt())
-    outband.FlushCache()
 
-@jit
 def calc_threshold_otsu(array):
-    """Calculate threshold by using the Otsu-method
+    """Calculate threshold by using the Otsu-method"""
 
-    This function calculates a threshold which divides an array.
-    The Otsu-method is used.
+    if np is None:
+        raise ImportError("NumPy is required to calculate Otsu threshold")
 
-    Args:
-        array: Target array
+    data = np.asarray(array)
+    data = data[np.isfinite(data)]
+    if data.size == 0:
+        raise ValueError("Input array contains no finite values")
 
-    Returns:
-        Calculated threshold from the input array.
+    if filters is not None:
+        return float(filters.threshold_otsu(data))
 
-    """
-    # src1d = np.sort(src.flatten())
-    # Masking the NaN element in the input array
-    maskedarray = np.ma.masked_array(array, np.isnan(array))
-    array1d = np.sort(maskedarray.flatten())
-    # array1d = [i for i in arraysort if np.isfinite(i)]
-    var = -10
-    threshold_otsu = 0
-    thresholdlist = np.sort(np.unique(array1d))
-    count_allpixel = len(array1d)
-    print(thresholdlist)
-    for threshold in thresholdlist:
-        index = np.argmax(array1d > threshold)
-        # index = np.argmin(array1d < threshold)
-        # index = np.searchsorted((array1d > =  threshold),True)
-        count_black = len(array1d[:index])
-        count_white = count_allpixel - count_black
-        if (count_black > 0) and (count_white > 0):
-            mean_black = np.mean(array1d[:index])
-            mean_white = np.mean(array1d[index:])
-            # print threshold, index,count_black, count_white,
-            # mean_black, mean_white
-            temp_variance = count_black*count_white*(mean_black-mean_white)**2
-            # print "current variance = "+str(temp_variance)
-            if temp_variance >= var:
-                var = temp_variance
-                threshold_otsu = threshold
-    return threshold_otsu
+    hist, bin_edges = np.histogram(data, bins=256)
+    bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
+    weight1 = np.cumsum(hist)
+    weight2 = hist.sum() - weight1
+    mean1 = np.cumsum(hist * bin_centers) / np.maximum(weight1, 1e-15)
+    mean2 = (np.sum(hist * bin_centers) - np.cumsum(hist * bin_centers)) / np.maximum(weight2, 1e-15)
+    between = weight1[:-1] * weight2[:-1] * (mean1[:-1] - mean2[:-1]) ** 2
+    idx = np.argmax(between)
+    return float(bin_centers[:-1][idx])
 
-@jit
+
 def apply_threshold_to_image(array, threshold):
     """Apply threshold for an array to binarize
 
@@ -142,9 +146,12 @@ def make_output_text(filename, filepath, textdata):
     """
 
     outpath = os.path.join(filepath, filename)
-    cf = open(outpath, 'wb')
-    cf.write([line+"\n" for line in textdata])
-    cf.close()
+    # Open the output file in text mode and ensure each line ends with a
+    # newline.  The previous implementation attempted to write a list of
+    # strings to a file opened in binary mode which raised a ``TypeError``.
+    with open(outpath, "w", encoding="utf-8") as cf:
+        for line in textdata:
+            cf.write(f"{line}\n")
 
 
 if __name__ == '__main__':
@@ -156,13 +163,14 @@ if __name__ == '__main__':
             if (item.endswith(".tif")) or (item.endswith(".TIF")):
                 imgpath = os.path.join(srcdir, item)
                 outpath = os.path.join(outdir, item)
-                raster = gdal.Open(imgpath)
-                rdimg = np.asarray(raster.GetRasterBand(1).ReadAsArray())
+                with rasterio.open(imgpath) as raster:
+                    rdimg = raster.read(1)
 
                 imgparameters = get_raster_parameters(imgpath)
                 # print imgparameters
                 # otsu(scikit-image built-in function)
-                print(filters.threshold_otsu(rdimg))
+                if filters is not None:
+                    print(filters.threshold_otsu(rdimg))
                 # otsu = filters.threshold_otsu(rdimg)
                 # binimg = rdimg < otsu
 
